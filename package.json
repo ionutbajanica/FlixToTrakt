@@ -1,5 +1,5 @@
 {
-  "name": "trakt-updater",
+  "name": "flix-to-trakt",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -10,11 +10,13 @@
   },
   "dependencies": {
     "next": "16.2.9",
+    "papaparse": "^5.5.3",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
