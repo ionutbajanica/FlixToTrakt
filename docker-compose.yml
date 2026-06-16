@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  flixtotrakt:
+    build: .
+    container_name: flixtotrakt
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    # If you put Nginx on the same docker network, you can remove the ports section 
+    # and just route directly to 'flixtotrakt:3000' inside the docker network.
