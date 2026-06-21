@@ -1,32 +1,62 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export default function LoginForm() {
   const [deviceData, setDeviceData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState('Waiting for authorization...');
+  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    // 1. Fetch Device Code
+  const fetchDeviceCode = useCallback(() => {
+    setError(null);
+    setErrorDetail(null);
+    setDeviceData(null);
+    setRetryCountdown(null);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+
     fetch('/api/auth/device/code', { method: 'POST' })
       .then(res => res.json())
       .then(data => {
-        if (data.error) throw new Error(data.error);
+        if (data.error) {
+          setError(data.error);
+          const detail = data.details || '';
+          setErrorDetail(detail);
+          // Auto-retry after 60s if rate limited
+          if (data.status === 429 || detail.toLowerCase().includes('rate') || detail.toLowerCase().includes('limit')) {
+            let secs = 60;
+            setRetryCountdown(secs);
+            countdownRef.current = setInterval(() => {
+              secs -= 1;
+              setRetryCountdown(secs);
+              if (secs <= 0) {
+                clearInterval(countdownRef.current!);
+                setRetryCountdown(null);
+                fetchDeviceCode();
+              }
+            }, 1000);
+          }
+          return;
+        }
         setDeviceData(data);
       })
       .catch(err => setError(err.message));
+  }, []);
 
+  useEffect(() => {
+    fetchDeviceCode();
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (countdownRef.current) clearInterval(countdownRef.current);
     };
-  }, []);
+  }, [fetchDeviceCode]);
 
   useEffect(() => {
     if (!deviceData) return;
 
-    // 2. Poll for Token
     const pollInterval = (deviceData.interval || 5) * 1000;
     
     intervalRef.current = setInterval(async () => {
@@ -42,9 +72,10 @@ export default function LoginForm() {
         if (result.success) {
           if (intervalRef.current) clearInterval(intervalRef.current);
           setStatusMsg('Successfully authorized! Redirecting...');
+          sessionStorage.setItem('skip_reload_clear', 'true');
           window.location.reload();
         } else if (result.status === 400) {
-          // Still waiting, do nothing
+          // Still waiting for user to authorize
         } else {
           setStatusMsg(`Error: ${result.message}`);
           if (intervalRef.current) clearInterval(intervalRef.current);
@@ -66,7 +97,25 @@ export default function LoginForm() {
         Your API credentials are saved. Now, you need to authorize this app to access your Trakt account.
       </p>
 
-      {error && <p style={{ color: 'red' }}>Error: {error}</p>}
+      {error && (
+        <div style={{ background: 'rgba(255,80,80,0.1)', border: '1px solid rgba(255,80,80,0.4)', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem' }}>
+          <p style={{ color: '#ff6b6b', fontWeight: 'bold', marginBottom: '0.5rem' }}>⚠️ {error}</p>
+          {errorDetail && (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.75rem', wordBreak: 'break-all' }}>
+              {errorDetail}
+            </p>
+          )}
+          {retryCountdown !== null ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Trakt rate limit hit. Auto-retrying in <strong>{retryCountdown}s</strong>…
+            </p>
+          ) : (
+            <button onClick={fetchDeviceCode} style={{ marginTop: '0.5rem', padding: '8px 20px', fontSize: '0.9rem' }}>
+              Retry
+            </button>
+          )}
+        </div>
+      )}
 
       {!deviceData && !error && <p>Generating device code...</p>}
 

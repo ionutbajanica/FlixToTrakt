@@ -22,7 +22,10 @@ export async function POST() {
 
   if (!response.ok) {
     const text = await response.text();
-    return NextResponse.json({ error: 'Failed to generate device code', details: text }, { status: response.status });
+    return NextResponse.json(
+      { error: 'Failed to generate device code', details: text, status: response.status },
+      { status: response.status }
+    );
   }
 
   const data = await response.json();

@@ -7,6 +7,7 @@ export async function POST() {
   cookieStore.delete('trakt_client_secret');
   cookieStore.delete('trakt_access_token');
   cookieStore.delete('trakt_refresh_token');
+  cookieStore.delete('tmdb_token');
 
   return NextResponse.json({ success: true });
 }

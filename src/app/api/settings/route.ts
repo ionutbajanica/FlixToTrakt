@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 export async function POST(request: Request) {
-  const { clientId, clientSecret } = await request.json();
+  const { clientId, clientSecret, tmdbToken } = await request.json();
 
   if (!clientId || !clientSecret) {
     return NextResponse.json({ error: 'Missing credentials' }, { status: 400 });
@@ -28,6 +28,20 @@ export async function POST(request: Request) {
     path: '/',
     maxAge: 60 * 60 * 24 * 365, // 1 year
   });
+
+  if (tmdbToken) {
+    const cleanTmdbToken = tmdbToken.trim();
+    cookieStore.set('tmdb_token', cleanTmdbToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 365, // 1 year
+    });
+  } else {
+    // Clear if it's sent empty
+    cookieStore.delete('tmdb_token');
+  }
 
   return NextResponse.json({ success: true });
 }

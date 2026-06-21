@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   description: "Sync your Netflix history to Trakt",
 };
 
+import ReloadHandler from "./components/ReloadHandler";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -16,7 +18,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <ReloadHandler />
+        {children}
+      </body>
     </html>
   );
 }
