@@ -1,5 +1,7 @@
 # FlixToTrakt
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/lordeye)
+
 > **🤖 Note:** This application was created entirely using AI for personal use. It is highly unlikely to be maintained or updated in the future.
 
 A powerful, privacy-first local web application that imports your Netflix viewing history into your [Trakt.tv](https://trakt.tv) account. Built with **Next.js 16**, **React 19**, and **TypeScript**.
