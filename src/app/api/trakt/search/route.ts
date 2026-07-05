@@ -65,6 +65,11 @@ const signalRateLimit = (retryAfterSeconds: number) => {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Strip trademark/copyright/special symbols that break API search queries
+// e.g. "LEGO® DREAMZzz" → "LEGO DREAMZzz", "AT&T" stays "AT&T"
+const normalizeForSearch = (s: string) =>
+  s.replace(/[®™©℗℠]/g, '').replace(/\s+/g, ' ').trim();
+
 // ── Request Helper ─────────────────────────────────────────────────────────
 const makeFetcher = (headers: Record<string, string>) => async (url: string): Promise<Response> => {
   await acquireToken();
@@ -141,16 +146,72 @@ export async function POST(request: Request) {
       const seasonPart = parts[1];
       const episodeName = parts.slice(2).join(':').toLowerCase();
 
-      const seasonMatch = seasonPart.match(/\d+/);
-      if (seasonMatch) {
-        const seasonNum = seasonMatch[0];
+      // Resolve season number from the season part — supports both digits and word-forms
+      // e.g. "Season 1" → 1, "Season One" → 1, "Part Two" → 2, "Chapter III" → 3
+      const wordToSeasonNumber = (text: string): string | undefined => {
+        const digitMatch = text.match(/(\d{1,2})/);
+        if (digitMatch) return digitMatch[1];
+        const words: Record<string, number> = {
+          one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+          seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+          first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6,
+          seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+          i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
+        };
+        const lower = text.toLowerCase();
+        for (const [word, num] of Object.entries(words)) {
+          if (new RegExp(`\\b${word}\\b`).test(lower)) return String(num);
+        }
+        return undefined;
+      };
+
+      let seasonNum = wordToSeasonNumber(seasonPart);
+
+      // If still unresolved (e.g. "Enter The Cyber Game"), try matching against
+      // TMDB's named season list — TMDB stores season names like "Season 3: Enter The Cyber Game"
+      if (!seasonNum && tmdbToken) {
+        const showNameClean = normalizeForSearch(showName);
+        const tmdbSeasonCacheKey = `tmdb-seasons-${showName.toLowerCase()}`;
+        let tmdbSeasons: any[] | null = cache.shows.get(tmdbSeasonCacheKey) ?? null;
+
+        if (!tmdbSeasons) {
+          const tmdbRes = await fetchTmdb(`https://api.themoviedb.org/3/search/tv?query=${encodeURIComponent(showNameClean)}&language=en-US`);
+          if (tmdbRes?.results?.length > 0) {
+            const tmdbId = tmdbRes.results[0].id;
+            const detailRes = await fetchTmdb(`https://api.themoviedb.org/3/tv/${tmdbId}?language=en-US`);
+            if (detailRes?.seasons) {
+              tmdbSeasons = detailRes.seasons;
+              cache.shows.set(tmdbSeasonCacheKey, tmdbSeasons);
+            }
+          }
+        }
+
+        if (tmdbSeasons) {
+          const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '').toLowerCase().trim();
+          const seasonPartNorm = stripArticle(seasonPart);
+          // Try exact then fuzzy match against TMDB season names
+          const matched = tmdbSeasons.find((s: any) => {
+            if (!s.name || s.season_number === 0) return false;
+            const sName = stripArticle(s.name);
+            return sName === seasonPartNorm || sName.includes(seasonPartNorm) || seasonPartNorm.includes(sName);
+          });
+          if (matched) {
+            seasonNum = String(matched.season_number);
+            console.log(`[Season Name Resolve] "${seasonPart}" → Season ${seasonNum} via TMDB`);
+          }
+        }
+      }
+
+      if (seasonNum) {
 
         // 1. Show lookup (cached)
         const showCacheKey = showName.toLowerCase();
         let showData = cache.shows.get(showCacheKey);
         if (!showData) {
+          const showNameClean = normalizeForSearch(showName);
+
           if (tmdbToken) {
-            const tmdbRes = await fetchTmdb(`https://api.themoviedb.org/3/search/tv?query=${encodeURIComponent(showName)}&language=en-US`);
+            const tmdbRes = await fetchTmdb(`https://api.themoviedb.org/3/search/tv?query=${encodeURIComponent(showNameClean)}&language=en-US`);
             if (tmdbRes && tmdbRes.results && tmdbRes.results.length > 0) {
               const tmdbId = tmdbRes.results[0].id;
               const traktRes = await fetchWithRetry(`https://api.trakt.tv/search/tmdb/${tmdbId}?type=show`);
@@ -161,7 +222,7 @@ export async function POST(request: Request) {
             }
           }
           if (!showData) {
-            const res = await fetchWithRetry(`https://api.trakt.tv/search/show?query=${encodeURIComponent(showName)}&limit=3`);
+            const res = await fetchWithRetry(`https://api.trakt.tv/search/show?query=${encodeURIComponent(normalizeForSearch(showName))}&limit=3`);
             if (res.ok) {
               showData = await res.json();
               cache.shows.set(showCacheKey, showData);
@@ -185,23 +246,37 @@ export async function POST(request: Request) {
           }
 
           if (episodes) {
-            // 3. Exact episode title match
-            const matchedEp = episodes.find((ep: any) => ep.title && ep.title.toLowerCase() === episodeName);
+            // Strip leading articles (the/a/an) for more forgiving title comparison
+            const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '').trim();
+            const episodeNameNorm = stripArticle(episodeName);
+
+            // 3. Exact episode title match (strict OR article-normalised)
+            const matchedEp = episodes.find((ep: any) => {
+              if (!ep.title) return false;
+              const epLower = ep.title.toLowerCase();
+              if (epLower === episodeName) return true;
+              // Article-normalised comparison
+              return stripArticle(epLower) === episodeNameNorm;
+            });
 
             if (matchedEp) {
               resultData = [{ type: 'episode', score: 100, episode: { ...matchedEp, showTitle: showData[0].show.title, showSlug } }];
               handled = true;
             } else if (episodes.length > 0) {
               // Partial scoring for suggestions
-              const searchWords = episodeName.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
+              const searchWords = episodeNameNorm.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
               const scored = episodes.map((ep: any) => {
                 let score = 0;
                 if (!ep.title) return { ...ep, _score: 0 };
                 const epTitle = ep.title.toLowerCase();
-                if (epTitle.includes(episodeName) || episodeName.includes(epTitle)) {
+                const epTitleNorm = stripArticle(epTitle);
+                // Substring match using normalised titles
+                if (epTitleNorm.includes(episodeNameNorm) || episodeNameNorm.includes(epTitleNorm)) {
+                  score = 50;
+                } else if (epTitle.includes(episodeName) || episodeName.includes(epTitle)) {
                   score = 50;
                 } else {
-                  const epWords = epTitle.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
+                  const epWords = epTitleNorm.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
                   for (const w of searchWords) { if (epWords.includes(w)) score++; }
                 }
                 return { ...ep, _score: score };
@@ -221,7 +296,8 @@ export async function POST(request: Request) {
 
     if (!handled) {
       // Fallback: generic movie/show search
-      const query = encodeURIComponent(title);
+      const titleClean = normalizeForSearch(title);
+      const query = encodeURIComponent(titleClean);
       let data = cache.fallbacks.get(query);
       if (!data) {
         if (tmdbToken) {
@@ -249,7 +325,7 @@ export async function POST(request: Request) {
 
       // Second fallback: search by show name only
       if (data && data.length === 0 && parts.length > 0) {
-        const fallbackQuery = encodeURIComponent(parts[0]);
+        const fallbackQuery = encodeURIComponent(normalizeForSearch(parts[0]));
         let fallbackData = cache.fallbacks.get(fallbackQuery);
         if (!fallbackData) {
           if (tmdbToken) {
