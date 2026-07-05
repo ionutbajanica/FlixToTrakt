@@ -250,13 +250,35 @@ export async function POST(request: Request) {
             const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '').trim();
             const episodeNameNorm = stripArticle(episodeName);
 
-            // 3. Exact episode title match (strict OR article-normalised)
+            const numberWords: Record<string, string> = {
+              one: '1', two: '2', three: '3', four: '4', five: '5',
+              six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
+              first: '1', second: '2', third: '3', fourth: '4', fifth: '5'
+            };
+
+            const romanWords: Record<string, string> = {
+              ix: '9', x: '10', viii: '8', vii: '7', vi: '6', v: '5', iv: '4', iii: '3', ii: '2', i: '1'
+            };
+
+            const normalizeNumbers = (s: string) => {
+              let res = s;
+              for (const [word, val] of Object.entries(numberWords)) {
+                res = res.replace(new RegExp(`\\b${word}\\b`, 'gi'), val);
+              }
+              for (const [word, val] of Object.entries(romanWords)) {
+                res = res.replace(new RegExp(`\\b${word}\\b`, 'gi'), val);
+              }
+              return res;
+            };
+
+            const normalizeFull = (s: string) => normalizeNumbers(stripArticle(s.toLowerCase()));
+
+            // 3. Exact episode title match (strict OR article/number-normalised)
             const matchedEp = episodes.find((ep: any) => {
               if (!ep.title) return false;
               const epLower = ep.title.toLowerCase();
               if (epLower === episodeName) return true;
-              // Article-normalised comparison
-              return stripArticle(epLower) === episodeNameNorm;
+              return normalizeFull(epLower) === normalizeFull(episodeName);
             });
 
             if (matchedEp) {
@@ -264,19 +286,21 @@ export async function POST(request: Request) {
               handled = true;
             } else if (episodes.length > 0) {
               // Partial scoring for suggestions
-              const searchWords = episodeNameNorm.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
+              const episodeNameFullNorm = normalizeFull(episodeName);
+              const searchWords = episodeNameFullNorm.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
               const scored = episodes.map((ep: any) => {
                 let score = 0;
                 if (!ep.title) return { ...ep, _score: 0 };
                 const epTitle = ep.title.toLowerCase();
-                const epTitleNorm = stripArticle(epTitle);
-                // Substring match using normalised titles
-                if (epTitleNorm.includes(episodeNameNorm) || episodeNameNorm.includes(epTitleNorm)) {
+                const epTitleFullNorm = normalizeFull(epTitle);
+                
+                // Substring match using fully normalised titles
+                if (epTitleFullNorm.includes(episodeNameFullNorm) || episodeNameFullNorm.includes(epTitleFullNorm)) {
                   score = 50;
                 } else if (epTitle.includes(episodeName) || episodeName.includes(epTitle)) {
                   score = 50;
                 } else {
-                  const epWords = epTitleNorm.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
+                  const epWords = epTitleFullNorm.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 0);
                   for (const w of searchWords) { if (epWords.includes(w)) score++; }
                 }
                 return { ...ep, _score: score };
