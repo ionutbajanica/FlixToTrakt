@@ -57,9 +57,12 @@ export default function LoginForm() {
   useEffect(() => {
     if (!deviceData) return;
 
-    const pollInterval = (deviceData.interval || 5) * 1000;
-    
-    intervalRef.current = setInterval(async () => {
+    // Add a 1s safety buffer to Trakt's required interval (e.g. 5s -> 6s) to avoid 429s
+    let currentIntervalMs = (Math.max(deviceData.interval || 5, 5) + 1) * 1000;
+    let isSubscribed = true;
+
+    const poll = async () => {
+      if (!isSubscribed) return;
       try {
         const res = await fetch('/api/auth/device/token', {
           method: 'POST',
@@ -68,25 +71,38 @@ export default function LoginForm() {
         });
         
         const result = await res.json();
+        if (!isSubscribed) return;
         
         if (result.success) {
-          if (intervalRef.current) clearInterval(intervalRef.current);
           setStatusMsg('Successfully authorized! Redirecting...');
           sessionStorage.setItem('skip_reload_clear', 'true');
           window.location.reload();
+          return;
         } else if (result.status === 400) {
           // Still waiting for user to authorize
+          setStatusMsg('Waiting for authorization...');
+        } else if (result.status === 429) {
+          // Trakt rate limit (Slow Down): add 5s to interval and keep polling
+          currentIntervalMs += 5000;
+          setStatusMsg(`Polling adjusted (${Math.round(currentIntervalMs / 1000)}s interval). Still waiting for authorization...`);
         } else {
           setStatusMsg(`Error: ${result.message}`);
-          if (intervalRef.current) clearInterval(intervalRef.current);
+          return; // Stop polling on hard errors (expired, denied, invalid)
         }
       } catch (e) {
-        // Network error, just retry next tick
+        // Network error, keep waiting
       }
-    }, pollInterval);
+
+      if (isSubscribed) {
+        intervalRef.current = setTimeout(poll, currentIntervalMs);
+      }
+    };
+
+    intervalRef.current = setTimeout(poll, currentIntervalMs);
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      isSubscribed = false;
+      if (intervalRef.current) clearTimeout(intervalRef.current);
     };
   }, [deviceData]);
 
