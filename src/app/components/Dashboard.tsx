@@ -3,11 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Papa from 'papaparse';
 import { motion, AnimatePresence } from 'framer-motion';
-
-interface NetflixHistoryItem {
-  Title: string;
-  Date: string;
-}
+import { detectDateOrder, parseNetflixRows } from '@/lib/netflix';
 
 interface TraktSearchResult {
   type: string;
@@ -82,182 +78,21 @@ export default function Dashboard() {
           return;
         }
 
-        const dataRows = rows.slice(1);
-        const initialItemsMap = new Map<string, ProcessedItem>();
+        // Netflix writes dates in the account's locale; a single unambiguous
+        // row settles the order for the whole file.
+        const dateOrder = detectDateOrder(rows.slice(1).map(row => (row[1] || '').trim())) ?? 'mdy';
 
-        dataRows.forEach(row => {
-          if (row.length < 2 || !row[0] || row[0].trim() === '') return;
-          
-          const originalTitle = row[0].trim();
-          const date = row[1] ? row[1].trim() : '';
-          
-          if (initialItemsMap.has(originalTitle)) {
-             initialItemsMap.get(originalTitle)!.dates.push(date);
-             return;
-          }
-          // Also handle rewatches for combined-episode split items
-          const split0Key = `${originalTitle}|||split0`;
-          if (initialItemsMap.has(split0Key)) {
-            let splitIdx = 0;
-            while (initialItemsMap.has(`${originalTitle}|||split${splitIdx}`)) {
-              initialItemsMap.get(`${originalTitle}|||split${splitIdx}`)!.dates.push(date);
-              splitIdx++;
-            }
-            return;
-          }
+        const initialItems: ProcessedItem[] = parseNetflixRows(rows, dateOrder).map(entry => ({
+          originalTitle: entry.originalTitle,
+          groupTitle: entry.groupTitle,
+          seasonNumber: entry.seasonNumber,
+          seasonName: entry.seasonName,
+          episodeTitle: entry.episodeTitle,
+          dates: entry.dates,
+          status: 'pending',
+          results: []
+        }));
 
-          let groupTitle: string | undefined;
-          let seasonNumber: number | undefined;
-          let episodeTitle: string | undefined;
-
-          // Convert word-based season labels to numbers:
-          // "Season One" → 1, "Part Two" → 2, "Chapter Three" → 3, etc.
-          const wordToSeasonNumber = (text: string): number | undefined => {
-            const words: Record<string, number> = {
-              one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
-              seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
-              first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6,
-              seventh: 7, eighth: 8, ninth: 9, tenth: 10,
-              i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
-            };
-            // First try a plain digit
-            const digitMatch = text.match(/(\d{1,2})/);
-            if (digitMatch) return parseInt(digitMatch[1], 10);
-            // Then try word-based
-            const lower = text.toLowerCase();
-            for (const [word, num] of Object.entries(words)) {
-              // Match whole word only
-              if (new RegExp(`\\b${word}\\b`).test(lower)) return num;
-            }
-            return undefined;
-          };
-
-          // regex 1: TvShow : Season 1 (or Season One): EpisodeTitle
-          // Match any season-like prefix (Season/Part/Chapter/Series/Volume) followed by digit or word
-          let match = originalTitle.match(/(.+):\s+((?:Season|Part|Chapter|Series|Volume)\s+[\w]+):\s+(.*)/);
-          if (match) {
-            groupTitle = match[1].trim();
-            seasonNumber = wordToSeasonNumber(match[2]);
-            episodeTitle = match[3].trim();
-          } else {
-            // regex 1b: TvShow : Season 1 - Part A: EpisodeTitle (dash variant)
-            match = originalTitle.match(/(.+):\s+((?:Season|Part|Chapter|Series|Volume)\s+[\w]+)\s+[–-]\s+.+:\s+(.*)/);
-            if (match) {
-              groupTitle = match[1].trim();
-              seasonNumber = wordToSeasonNumber(match[2]);
-              episodeTitle = match[3].trim();
-            } else {
-              // regex 2: legacy numeric-only fallback: TvShow : Season 1: EpisodeTitle
-              match = originalTitle.match(/(.+):\s+.+\s+(\d{1,2}):\s+(.*)/);
-              if (match) {
-                groupTitle = match[1].trim();
-                seasonNumber = parseInt(match[2], 10);
-                episodeTitle = match[3].trim();
-              } else {
-                // regex 3: TvShow : TvShow: Miniseries : EpisodeTitle
-                match = originalTitle.match(/(.+):\s+\w+:\s+(.+)/);
-                if (match) {
-                  groupTitle = match[1].trim();
-                  seasonNumber = 1;
-                  episodeTitle = match[2].trim();
-                } else {
-                  // regex 4: TvShow: SeasonName : EpisodeTitle
-                  // SeasonName may be arbitrary (e.g. "Enter The Cyber Game") — store as seasonName
-                  // for later TMDB season-name resolution in the search route.
-                  match = originalTitle.match(/(.+):\s+(.+):\s+(.+)/);
-                  if (match) {
-                    groupTitle = match[1].trim();
-                    const resolvedNum = wordToSeasonNumber(match[2]);
-                    if (resolvedNum !== undefined) {
-                      seasonNumber = resolvedNum;
-                    } else {
-                      // Store raw season name for TMDB lookup later
-                      (initialItemsMap as any).__pendingSeasonName = match[2].trim();
-                    }
-                    episodeTitle = match[3].trim();
-                  } else {
-                    // regex 5: TvShow: EpisodeTitle
-                    match = originalTitle.match(/(.+):\s+(.+)/);
-                    if (match) {
-                      groupTitle = match[1].trim();
-                      seasonNumber = 1;
-                      episodeTitle = match[2].trim();
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          // Handle Netflix combined episodes: "The Third/The Debt" → two episodes
-          // We look for "/" as a separator but only when episodeTitle is set
-          // and neither half looks like a year/number-only segment.
-          const splitEpisodeTitles: string[] = [];
-          if (episodeTitle) {
-            const slashParts = episodeTitle.split('/').map((p: string) => p.trim()).filter((p: string) => p.length > 0);
-            if (slashParts.length >= 2) {
-              slashParts.forEach((p: string) => splitEpisodeTitles.push(p));
-            }
-          }
-
-          // Extract the raw season name when seasonNumber couldn't be resolved
-          let seasonName: string | undefined;
-          if (seasonNumber === undefined && groupTitle && episodeTitle) {
-            // Re-parse the middle segment as seasonName
-            const midMatch = originalTitle.match(/^.+?:\s+(.+?):\s+.+$/);
-            if (midMatch) {
-              const mid = midMatch[1].trim();
-              // Only store as seasonName if it's not a plain number word (already handled above)
-              if (!wordToSeasonNumber(mid)) seasonName = mid;
-            }
-          }
-
-          if (splitEpisodeTitles.length >= 2) {
-            // Create one item per sub-episode
-            splitEpisodeTitles.forEach((subEpisodeTitle, idx) => {
-              const subKey = `${originalTitle}|||split${idx}`;
-              initialItemsMap.set(subKey, {
-                originalTitle: `${originalTitle} [Part ${idx + 1}: ${subEpisodeTitle}]`,
-                groupTitle,
-                seasonNumber,
-                seasonName,
-                episodeTitle: subEpisodeTitle,
-                dates: [date],
-                status: 'pending',
-                results: []
-              });
-            });
-          } else {
-            initialItemsMap.set(originalTitle, {
-              originalTitle,
-              groupTitle,
-              seasonNumber,
-              seasonName,
-              episodeTitle,
-              dates: [date],
-              status: 'pending',
-              results: []
-            });
-          }
-        });
-
-        const initialItems = Array.from(initialItemsMap.values());
-
-        const parseDate = (dateStr: string) => {
-          if (!dateStr) return 0;
-          let time = new Date(dateStr).getTime();
-          if (isNaN(time)) {
-            const parts = dateStr.split(/[-/.]/);
-            if (parts.length === 3) {
-              time = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime();
-            }
-          }
-          return isNaN(time) ? 0 : time;
-        };
-
-        // Sort by the most recent date of the grouped dates array
-        initialItems.sort((a, b) => parseDate(b.dates[0]) - parseDate(a.dates[0]));
-          
         currentJobIdRef.current += 1;
         setIsProcessing(false);
         setCurrentlyProcessingTitle(null);
