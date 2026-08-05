@@ -50,11 +50,22 @@ Instead of silently hanging when Trakt's API rate limit (1,000 requests per 5 mi
 
 ## 🚀 Getting Started
 
+### Two modes
+
+| Mode | Needs a Trakt API app? | What it does |
+|------|------------------------|--------------|
+| **Sync mode** | Yes (Client ID + Secret) | Matches your history and writes it straight into your Trakt account over the API. |
+| **Export mode** | **No** | Matches your history against TMDB and writes an import file you upload on Trakt's own import page. |
+
+Trakt no longer lets every account register an API application, so if the
+[Create Application](https://trakt.tv/oauth/applications/new) page is unavailable to you, use **export mode** —
+it never touches the Trakt API and needs no Trakt credentials at all.
+
 ### Prerequisites
-- [Node.js](https://nodejs.org/) v18+
+- [Node.js](https://nodejs.org/) v18+ (v22+ to run the unit tests)
 - A [Trakt.tv](https://trakt.tv) account
-- A Trakt API application (create one at [trakt.tv/oauth/applications](https://trakt.tv/oauth/applications))
-- *(Optional but recommended)* A [TMDB](https://www.themoviedb.org/) API read access token for better matching accuracy
+- **Sync mode:** a Trakt API application (create one at [trakt.tv/oauth/applications](https://trakt.tv/oauth/applications)); a [TMDB](https://www.themoviedb.org/) API read access token is optional but strongly recommended
+- **Export mode:** only a TMDB API read access token (free, granted instantly)
 
 ### Installation
 
@@ -67,7 +78,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### Usage
+### Usage — sync mode
 
 1. **Enter API credentials** — Paste your Trakt Client ID, Client Secret, and optionally your TMDB read access token.
 2. **Authenticate with Trakt** — The app uses Trakt's **Device Authentication** flow: you'll be given a code to enter at [trakt.tv/activate](https://trakt.tv/activate). No redirect URIs needed.
@@ -76,6 +87,39 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 5. **Sync to Trakt** — Hit the "Sync to Trakt" button. Items are synced in small batches with automatic rate-limit retry.
 
 > **Note:** On page reload, Trakt credentials are cleared for security. You'll need to re-authenticate, but your Trakt API keys are persisted.
+
+### Usage — export mode (no Trakt API app)
+
+1. **Pick "Export a file (no Trakt app)"** on the setup screen and paste your TMDB read access token. Nothing else is stored.
+2. **Upload your Netflix CSV** — same file as above. The app auto-detects whether Netflix wrote your dates as `MM/DD/YY` or `DD/MM/YY`; you can override it with one click.
+3. **Match with TMDB** — titles are resolved to TMDB shows, seasons, episodes and movies in batches. Anything ambiguous lands in a review list with suggestions, a manual TMDB search box, an episode browser, and a group-level "mark the whole show as watched" action.
+4. **Download an import file** — three formats are produced from the same matches:
+
+   | File | Contents | Use it for |
+   |------|----------|-----------|
+   | `trakt-history.json` | Movies plus shows with nested seasons/episodes, each with a `watched_at` timestamp — Trakt's own history payload shape | First choice; the only format that carries episodes *and* exact dates |
+   | `trakt-history.csv` | One row per watch: `watched_at, type, title, year, imdb_id, tmdb_id, tvdb_id, season_number, episode_number, episode_title, episode_tmdb_id` | Fallback if the JSON is rejected |
+   | `letterboxd-diary.csv` | Letterboxd diary format, movies only | Movies-only fallback; also imports into Letterboxd |
+
+   A fourth button downloads everything that *didn't* match, so nothing disappears silently.
+5. **Import on Trakt** — go to [Trakt → Settings](https://trakt.tv/settings) → import your data, and upload the file. Importing works on free accounts (exporting is the VIP-only direction). Trakt skips duplicates and any import can be undone from the same page.
+
+Watch dates become midday UTC timestamps, which keeps the calendar day correct in every timezone from UTC-11 to UTC+11. Netflix only records the day, not the time.
+
+### Other ways in (no code required)
+
+If you'd rather not run anything:
+
+- **[Universal Trakt Scrobbler](https://github.com/trakt-tools/universal-trakt-scrobbler)** — browser extension that ships its own Trakt API app, so you don't register one. It reads your Netflix viewing activity directly and syncs it to Trakt.
+- **Trakt's own Streaming Scrobbler** — connect Netflix inside Trakt's mobile app and let it pull your history. Requires Trakt VIP.
+- **[Simkl](https://simkl.com/apps/import/)** — imports a Netflix CSV, and Trakt/Simkl can be kept in sync from there.
+
+### Tests
+
+```bash
+npm test     # Netflix CSV parsing + export file formats (node:test)
+npm run build
+```
 
 ---
 
@@ -103,6 +147,8 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 | `POST /api/trakt/sync` | Sync matched items to Trakt watch history (with 15s timeout + 429 retry) |
 | `POST /api/trakt/watched` | Fetch existing Trakt watch history for duplicate detection |
 | `POST /api/trakt/show-episode-count` | Look up total episode count from TMDB for full-show shortcut |
+| `POST /api/tmdb/match` | Export mode: batch-match Netflix titles against TMDB only (no Trakt credentials) |
+| `POST /api/tmdb/search` | Export mode: manual TMDB search, or the episode list of a known show |
 
 ### Rate Limiting
 A shared server-side **token bucket** (3 requests/second) with a global `pauseUntil` field ensures:
@@ -114,11 +160,23 @@ A shared server-side **token bucket** (3 requests/second) with a global `pauseUn
 
 | Component | Role |
 |-----------|------|
-| `SetupForm` | Collects and saves Trakt + TMDB API credentials |
+| `SetupForm` | Picks the mode and collects the credentials that mode needs |
 | `LoginForm` | Handles Trakt Device Auth flow with real-time polling |
-| `Dashboard` | Main UI — CSV upload, batch processing, manual review, sync |
-| `ReloadHandler` | Clears Trakt auth token on page reload (credentials persist) |
-| `ClientPage` | State router between Setup → Login → Dashboard |
+| `Dashboard` | Sync mode — CSV upload, batch processing, manual review, sync |
+| `ExportDashboard` | Export mode — CSV upload, TMDB matching, review, import-file download |
+| `ReloadHandler` | Clears Trakt auth token on page reload (skipped in export mode) |
+| `ClientPage` | State router between Setup → Login → Dashboard / Export |
+
+### Shared modules
+
+| Module | Role |
+|--------|------|
+| `lib/netflix.ts` | Netflix CSV parsing: title → show/season/episode, date-order detection, UTC timestamps |
+| `lib/titles.ts` | Title normalisation and fuzzy scoring used by both matchers |
+| `lib/tmdb.ts` | TMDB client with per-process caching, concurrency cap and 429 back-off |
+| `lib/tmdbMatch.ts` | TMDB-only matching pipeline behind export mode |
+| `lib/traktExport.ts` | Builders for the Trakt JSON, Trakt CSV and Letterboxd CSV import files |
+| `lib/trakt-server.ts` | Authenticated Trakt fetcher and auth-error handling for the API routes |
 
 ---
 

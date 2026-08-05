@@ -10,6 +10,10 @@ export default function ReloadHandler() {
         const navTiming = navEntries[0] as PerformanceNavigationTiming;
         
         if (navTiming.type === "reload") {
+          // Export mode holds no Trakt session — clearing it on every reload
+          // would just throw away the TMDB token mid-review.
+          if (document.cookie.split('; ').includes('app_mode=export')) return;
+
           const skip = sessionStorage.getItem('skip_reload_clear');
           if (skip) {
             sessionStorage.removeItem('skip_reload_clear');
