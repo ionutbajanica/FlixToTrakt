@@ -1,33 +1,31 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { createTraktFetcher, TraktAuthError, traktAuthErrorResponse } from '@/lib/trakt-server';
 
 export async function GET() {
   const cookieStore = await cookies();
-  const clientId = cookieStore.get('trakt_client_id')?.value;
-  const token = cookieStore.get('trakt_access_token')?.value;
 
-  if (!clientId || !token) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  let fetchTrakt;
+  try {
+    ({ fetchTrakt } = createTraktFetcher(cookieStore));
+  } catch (e) {
+    if (e instanceof TraktAuthError) {
+      const { body, status } = traktAuthErrorResponse(e);
+      return NextResponse.json(body, { status });
+    }
+    throw e;
   }
 
   try {
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      'trakt-api-version': '2',
-      'trakt-api-key': clientId,
-      'User-Agent': 'Trakt-Updater-App/1.0',
-    };
-
     const [moviesRes, showsRes] = await Promise.all([
-      fetch('https://api.trakt.tv/sync/watched/movies', { headers }),
-      fetch('https://api.trakt.tv/sync/watched/shows', { headers })
+      fetchTrakt('https://api.trakt.tv/sync/watched/movies'),
+      fetchTrakt('https://api.trakt.tv/sync/watched/shows')
     ]);
 
     if (!moviesRes.ok || !showsRes.ok) {
-      console.error('Movies Res:', moviesRes.status, moviesRes.statusText);
-      console.error('Shows Res:', showsRes.status, showsRes.statusText);
-      return NextResponse.json({ error: 'Failed to fetch watched history' }, { status: 500 });
+      const isAuthError = moviesRes.status === 401 || moviesRes.status === 403 || showsRes.status === 401 || showsRes.status === 403;
+      const status = isAuthError ? 401 : 500;
+      return NextResponse.json({ error: isAuthError ? 'Unauthorized or invalid token' : 'Failed to fetch watched history' }, { status });
     }
 
     const moviesData = await moviesRes.json();
@@ -56,6 +54,10 @@ export async function GET() {
     });
 
   } catch (error) {
+    if (error instanceof TraktAuthError) {
+      const { body, status } = traktAuthErrorResponse(error);
+      return NextResponse.json(body, { status });
+    }
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
