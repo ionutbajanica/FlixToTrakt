@@ -9,7 +9,9 @@ const linkStyle = { textDecoration: 'underline', color: 'var(--primary)' };
 const codeStyle = { background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '4px' };
 
 export default function SetupForm() {
-  const [mode, setMode] = useState<Mode>('trakt');
+  // Default to export mode: Trakt no longer lets every account create an API
+  // app, so the path that always works should be the one you land on.
+  const [mode, setMode] = useState<Mode>('export');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [tmdbToken, setTmdbToken] = useState('');
@@ -52,11 +54,11 @@ export default function SetupForm() {
       <h2>{mode === 'trakt' ? 'Setup Trakt API' : 'Setup Export Mode'}</h2>
 
       <div style={{ display: 'flex', gap: '0.5rem', margin: '1.5rem 0' }}>
-        <button type="button" style={tabStyle(mode === 'trakt')} onClick={() => setMode('trakt')}>
-          Sync directly (needs a Trakt app)
-        </button>
         <button type="button" style={tabStyle(mode === 'export')} onClick={() => setMode('export')}>
           Export a file (no Trakt app)
+        </button>
+        <button type="button" style={tabStyle(mode === 'trakt')} onClick={() => setMode('trakt')}>
+          Sync directly (needs a Trakt app)
         </button>
       </div>
 
