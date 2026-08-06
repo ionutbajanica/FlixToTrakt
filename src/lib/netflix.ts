@@ -120,6 +120,17 @@ export const parseNetflixTitle = (originalTitle: string): ParsedTitle => {
     }
   }
 
+  // "Breeders: No Cure: Part II" has no season indicator at all, so the
+  // generic split above guessed "No Cure" was a season name and left
+  // episodeTitle as the bare "Part II". A part marker alone is never a real
+  // episode title (TMDB's own name is "No Cure (2)") — the middle segment
+  // was actually the start of the episode's title, not a season. Stitch
+  // them back together and drop the bogus season guess.
+  if (seasonNumber === undefined && seasonName && episodeTitle && /^(?:part|chapter)\s+\S+$/i.test(episodeTitle)) {
+    episodeTitle = `${seasonName}: ${episodeTitle}`;
+    seasonName = undefined;
+  }
+
   return { groupTitle, seasonNumber, seasonName, episodeTitle };
 };
 

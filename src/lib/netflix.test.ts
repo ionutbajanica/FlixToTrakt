@@ -37,6 +37,16 @@ test('named seasons are kept for later TMDB resolution', () => {
   assert.equal(parsed.episodeTitle, 'The Dragon Master');
 });
 
+test('a bare "Part II" is folded back into the episode title instead of eating it as a season', () => {
+  // No "Season" keyword at all, so the generic split would otherwise treat
+  // "No Cure" as a bogus season name and leave episodeTitle as just "Part II".
+  const parsed = parseNetflixTitle('Breeders: No Cure: Part II');
+  assert.equal(parsed.groupTitle, 'Breeders');
+  assert.equal(parsed.seasonNumber, undefined);
+  assert.equal(parsed.seasonName, undefined);
+  assert.equal(parsed.episodeTitle, 'No Cure: Part II');
+});
+
 test('movies stay unparsed', () => {
   const parsed = parseNetflixTitle('The Irishman');
   assert.equal(parsed.groupTitle, undefined);
