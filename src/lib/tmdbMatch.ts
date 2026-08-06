@@ -4,7 +4,16 @@
 // resolution → exact episode title match → fuzzy suggestions), but resolves
 // everything against TMDB so the result can be written to an import file.
 
-import { normalizeForSearch, normalizeTitle, stripArticle, titleScore } from './titles';
+import {
+  isCloseTitle,
+  normalizeForSearch,
+  normalizeTitle,
+  splitNormalizedPart,
+  stripArticle,
+  stripPartSuffix,
+  titleScore,
+  tmdbPartNumber,
+} from './titles';
 import { TmdbClient, TmdbShowDetails, yearOf } from './tmdb';
 import { MediaMatch, describeMatch } from './traktExport';
 
@@ -136,6 +145,9 @@ const matchEpisode = async (
   // which is still cheap because season fetches are cached across entries.
   const seasonsToScan = seasonNumber !== undefined ? [seasonNumber] : numbered.slice(0, 30);
   const target = normalizeTitle(entry.episodeTitle);
+  // Netflix sometimes spells the part out ("No More Part I" → "no more part
+  // 1" once normalized); TMDB always uses a "(1)" suffix instead.
+  const { base: targetBase, part: targetPart } = splitNormalizedPart(target);
 
   const scanned: { season: number; episodes: Awaited<ReturnType<TmdbClient['seasonEpisodes']>> }[] = [];
   for (const season of seasonsToScan) {
@@ -149,6 +161,44 @@ const matchEpisode = async (
         key: entry.key,
         status: 'matched',
         match: episodeMatchFrom(details, exact.season_number ?? season, exact.episode_number, exact.name, exact.id),
+        candidates: [],
+      };
+    }
+
+    // TMDB numbers multi-part episodes ("Hurt (1)", "No More (2)") while
+    // Netflix either repeats the bare title for every part or spells the
+    // part out ("No More Part I"). Match on the base title, and on the part
+    // number too whenever Netflix's title gave us one.
+    const partMatches = episodes.filter(episode => {
+      if (!episode.name) return false;
+      const epPart = tmdbPartNumber(episode.name);
+      if (epPart === undefined) return false;
+      if (normalizeTitle(stripPartSuffix(episode.name)) !== targetBase) return false;
+      return targetPart === undefined || targetPart === epPart;
+    });
+    if (partMatches.length === 1) {
+      const episode = partMatches[0];
+      return {
+        key: entry.key,
+        status: 'matched',
+        match: episodeMatchFrom(details, episode.season_number ?? season, episode.episode_number, episode.name, episode.id),
+        candidates: [],
+      };
+    }
+
+    // Netflix and TMDB occasionally spell a title slightly differently —
+    // usually localisation drift, like "Nuevo Orleans" vs "Nueva Orleans".
+    // If exactly one episode this season is a near-identical spelling, treat
+    // it as the match rather than sending an obvious pair to manual review.
+    const closeMatches = episodes.filter(
+      episode => episode.name && isCloseTitle(normalizeTitle(episode.name), target)
+    );
+    if (closeMatches.length === 1) {
+      const episode = closeMatches[0];
+      return {
+        key: entry.key,
+        status: 'matched',
+        match: episodeMatchFrom(details, episode.season_number ?? season, episode.episode_number, episode.name, episode.id),
         candidates: [],
       };
     }
@@ -280,9 +330,19 @@ export const matchEntry = async (
     const fallback = await matchMovieOrShow(client, entry);
     if (fallback.status === 'matched') return fallback;
 
+    // Both searches often surface the same show (e.g. as a "whole show"
+    // fallback candidate and again via the general title search) — dedupe
+    // by id, keeping whichever scored higher, so the UI never has to render
+    // two entries with the same key.
+    const merged = new Map<string, MatchCandidate>();
+    for (const candidate of [...episodeResult.candidates, ...fallback.candidates]) {
+      const existing = merged.get(candidate.id);
+      if (!existing || candidate.score > existing.score) merged.set(candidate.id, candidate);
+    }
+
     return {
       ...episodeResult,
-      candidates: [...episodeResult.candidates, ...fallback.candidates].slice(0, 8),
+      candidates: Array.from(merged.values()).slice(0, 8),
     };
   } catch {
     return { key: entry.key, status: 'none', candidates: [], note: 'Lookup failed.' };
