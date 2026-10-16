@@ -11,7 +11,7 @@ A powerful, privacy-first local web application that imports your Netflix viewin
 ## ✨ Features
 
 ### 🔒 Privacy First
-All processing happens locally on your machine. Your Trakt API credentials are stored in HTTP-only cookies — no data is ever sent to a third-party server.
+All processing happens locally on your machine. Your Trakt sign-in is stored in HTTP-only cookies — no data is ever sent to a third-party server.
 
 ### 🧠 Smart Multi-Layer Matching
 The app uses a sophisticated matching pipeline to convert Netflix's messy CSV titles into accurate Trakt entries:
@@ -57,17 +57,21 @@ Instead of silently hanging when Trakt's API rate limit (1,000 requests per 5 mi
 
 | Mode | Needs a Trakt API app? | What it does |
 |------|------------------------|--------------|
-| **Sync mode** | Yes (Client ID + Secret) | Matches your history and writes it straight into your Trakt account over the API. |
+| **Sync mode** | No: FlixToTrakt ships its own Trakt app. You can optionally use yours | Matches your history and writes it straight into your Trakt account over the API. |
 | **Export mode** | **No** | Matches your history against TMDB and writes an import file you upload on Trakt's own import page. |
 
-Trakt no longer lets every account register an API application, so if the
-[Create Application](https://trakt.tv/oauth/applications/new) page is unavailable to you, use **export mode** —
-it never touches the Trakt API and needs no Trakt credentials at all.
+Sync mode signs in with Trakt's device flow, which needs only a Client ID and no Client Secret. That lets
+everyone share the project's own Trakt app. Two Trakt rules apply:
+
+- **Free Trakt accounts can keep one third-party app connected at a time.** Connecting FlixToTrakt may mean
+  disconnecting another app first. You can disconnect FlixToTrakt again under Trakt → Settings → Connected Apps once
+  the import is done.
+- **Export mode** never touches the Trakt API, so neither that limit nor any API rule applies to it.
 
 ### Prerequisites
 - [Node.js](https://nodejs.org/) v18+ (v22+ to run the unit tests)
 - A [Trakt.tv](https://trakt.tv) account
-- **Sync mode:** a Trakt API application (create one at [trakt.tv/oauth/applications](https://trakt.tv/oauth/applications)); a [TMDB](https://www.themoviedb.org/) API read access token is optional but strongly recommended
+- **Sync mode:** nothing beyond the Trakt account. A [TMDB](https://www.themoviedb.org/) API read access token is optional but strongly recommended
 - **Export mode:** only a TMDB API read access token (free, granted instantly)
 
 ### Installation
@@ -83,13 +87,26 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ### Usage — sync mode
 
-1. **Enter API credentials** — Paste your Trakt Client ID, Client Secret, and optionally your TMDB read access token.
-2. **Authenticate with Trakt** — The app uses Trakt's **Device Authentication** flow: you'll be given a code to enter at [trakt.tv/activate](https://trakt.tv/activate). No redirect URIs needed.
+1. **Pick "Sync directly to Trakt"** and optionally paste your TMDB read access token. To use your own Trakt app instead of the shared one, open *Advanced* and paste its Client ID (see [Using your own Trakt app](#using-your-own-trakt-app)).
+2. **Authenticate with Trakt** — The app uses Trakt's **Device Authentication** flow: you'll be given a code to enter on Trakt's activation page. No redirect URIs or Client Secret needed.
 3. **Upload your Netflix CSV** — Go to your [Netflix Account Settings](https://www.netflix.com/account) → Profile → Viewing Activity → Download All, then upload the CSV file.
 4. **Review matches** — The app processes your titles in batches, showing real-time progress. Review any items that need manual attention.
 5. **Sync to Trakt** — Hit the "Sync to Trakt" button. Items are synced in small batches with automatic rate-limit retry.
 
-> **Note:** On page reload, Trakt credentials are cleared for security. You'll need to re-authenticate, but your Trakt API keys are persisted.
+> **Note:** On page reload, your Trakt sign-in is cleared for security, so you'll need to re-authenticate. Trakt access tokens also expire after 7 days.
+
+### Using your own Trakt app
+
+Optional in sync mode, and required only if the deployment has no shared Client ID configured:
+
+1. Go to [developer.trakt.tv → My Apps](https://developer.trakt.tv/apps). Trakt asks for a one-time GitHub account verification before your first app. VIP is not required.
+2. Create an app. The Redirect URI isn't used, because FlixToTrakt signs in with a device code.
+3. Paste its **Client ID** under *Advanced* on the setup screen. The Client Secret isn't needed.
+
+Trakt deletes apps that see no use for 30 days.
+
+To change the shared app for a whole deployment, set the `TRAKT_CLIENT_ID` environment variable. It overrides
+the Client ID committed in `src/lib/trakt-server.ts`.
 
 ### Usage — export mode (no Trakt API app)
 
@@ -150,7 +167,7 @@ Add `--lib <other checkout>/src/lib` to run another version of the matcher over 
 
 | Route | Purpose |
 |-------|---------|
-| `POST /api/settings` | Save Trakt Client ID, Secret, and TMDB token as HTTP-only cookies |
+| `POST /api/settings` | Save the mode, an optional own Trakt Client ID, and the TMDB token as HTTP-only cookies |
 | `POST /api/settings/clear` | Clear all stored credentials |
 | `POST /api/auth/device/code` | Request a Trakt device authentication code |
 | `POST /api/auth/device/token` | Poll for OAuth token after user authorizes the device |
@@ -187,7 +204,7 @@ A shared server-side **token bucket** (3 requests/second) with a global `pauseUn
 | `lib/tmdb.ts` | TMDB client with per-process caching, concurrency cap and 429 back-off |
 | `lib/tmdbMatch.ts` | TMDB-only matching pipeline behind export mode |
 | `lib/traktExport.ts` | Builders for the Trakt JSON, Trakt CSV and Letterboxd CSV import files |
-| `lib/trakt-server.ts` | Authenticated Trakt fetcher and auth-error handling for the API routes |
+| `lib/trakt-server.ts` | Shared Trakt Client ID, Client ID resolution, authenticated fetcher and auth-error handling |
 
 ---
 

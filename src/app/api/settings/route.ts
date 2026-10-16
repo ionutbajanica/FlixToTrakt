@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { sharedTraktClientId } from '@/lib/trakt-server';
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -10,7 +11,7 @@ const COOKIE_OPTIONS = {
 };
 
 export async function POST(request: Request) {
-  const { clientId, clientSecret, tmdbToken, mode } = await request.json();
+  const { clientId, tmdbToken, mode } = await request.json();
 
   const cookieStore = await cookies();
 
@@ -27,12 +28,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
   }
 
-  if (!clientId || !clientSecret) {
-    return NextResponse.json({ error: 'Missing credentials' }, { status: 400 });
+  // A Client ID of their own is optional when this deployment has a shared
+  // Trakt app; without one, it is the only way to sign in.
+  const ownClientId = typeof clientId === 'string' ? clientId.trim() : '';
+
+  if (!ownClientId && !sharedTraktClientId()) {
+    return NextResponse.json({ error: 'Missing Trakt Client ID' }, { status: 400 });
   }
 
-  cookieStore.set('trakt_client_id', clientId.trim(), COOKIE_OPTIONS);
-  cookieStore.set('trakt_client_secret', clientSecret.trim(), COOKIE_OPTIONS);
+  if (ownClientId) {
+    cookieStore.set('trakt_client_id', ownClientId, COOKIE_OPTIONS);
+  } else {
+    cookieStore.delete('trakt_client_id');
+  }
+  // Left over from when sign-in needed a Client Secret; it is no longer sent.
+  cookieStore.delete('trakt_client_secret');
   cookieStore.set('app_mode', 'trakt', { ...COOKIE_OPTIONS, httpOnly: false });
 
   if (tmdbToken) {

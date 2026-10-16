@@ -8,12 +8,11 @@ type Mode = 'trakt' | 'export';
 const linkStyle = { textDecoration: 'underline', color: 'var(--primary)' };
 const codeStyle = { background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '4px' };
 
-export default function SetupForm() {
-  // Default to export mode: Trakt no longer lets every account create an API
-  // app, so the path that always works should be the one you land on.
-  const [mode, setMode] = useState<Mode>('export');
+export default function SetupForm({ hasSharedClientId }: { hasSharedClientId: boolean }) {
+  // With a shared Trakt app, syncing needs nothing from the user, so it is the
+  // default. Without one, export mode is the path that works for everyone.
+  const [mode, setMode] = useState<Mode>(hasSharedClientId ? 'trakt' : 'export');
   const [clientId, setClientId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
   const [tmdbToken, setTmdbToken] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -26,7 +25,7 @@ export default function SetupForm() {
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId, clientSecret, tmdbToken, mode }),
+        body: JSON.stringify({ clientId, tmdbToken, mode }),
       });
 
       if (res.ok) {
@@ -58,24 +57,44 @@ export default function SetupForm() {
           Export a file (no Trakt app)
         </button>
         <button type="button" style={tabStyle(mode === 'trakt')} onClick={() => setMode('trakt')}>
-          Sync directly (needs a Trakt app)
+          {hasSharedClientId ? 'Sync directly to Trakt' : 'Sync directly (needs a Trakt app)'}
         </button>
       </div>
 
       {mode === 'trakt' ? (
         <div style={{ textAlign: 'left', background: 'var(--bg-accent)', padding: '1.5rem', borderRadius: '8px', marginBottom: '2rem' }}>
-          <p style={{ marginBottom: '1rem', fontWeight: 'bold' }}>
-            To sync your history, you need to connect your Trakt account. Follow these easy steps:
-          </p>
-          <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            <li>Log into Trakt and go to the <a href="https://trakt.tv/oauth/applications/new" target="_blank" rel="noreferrer" style={linkStyle}>Create Application</a> page.</li>
-            <li>In the <strong>Name</strong> field, type something like <em>Netflix Sync</em>.</li>
-            <li>In the <strong>Redirect uri</strong> field, copy and paste exactly this text: <code style={{ userSelect: 'all', ...codeStyle }}>urn:ietf:wg:oauth:2.0:oob</code></li>
-            <li>Click the <strong>Save App</strong> button at the very bottom.</li>
-          </ol>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Once saved, Trakt will give you a <strong>Client ID</strong> and <strong>Client Secret</strong> at the top of the next page. Copy and paste those into the boxes below.
-          </p>
+          {hasSharedClientId ? (
+            <>
+              <p style={{ marginBottom: '1rem', fontWeight: 'bold' }}>
+                No Trakt API app or keys needed.
+              </p>
+              <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                Save below and you&apos;ll get a short code to enter on Trakt&apos;s activation page. That connects
+                your account to FlixToTrakt, and your history is synced straight into it.
+              </p>
+              <p style={{ color: 'var(--text-secondary)' }}>
+                Free Trakt accounts can keep one third-party app connected at a time. If you already use another
+                one, Trakt will ask you to disconnect it first. You can disconnect FlixToTrakt again under
+                Trakt → Settings → Connected Apps once your import is done.
+              </p>
+            </>
+          ) : (
+            <p style={{ marginBottom: '1rem', fontWeight: 'bold' }}>
+              This copy of FlixToTrakt has no shared Trakt app configured, so you need a Client ID of your own (see below).
+            </p>
+          )}
+
+          <details open={!hasSharedClientId} style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+              {hasSharedClientId ? 'Advanced: use your own Trakt app (optional)' : 'Create your own Trakt app'}
+            </summary>
+            <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', margin: '1rem 0' }}>
+              <li>Go to <a href="https://developer.trakt.tv/apps" target="_blank" rel="noreferrer" style={linkStyle}>developer.trakt.tv → My Apps</a>. Trakt asks you to verify a GitHub account once before your first app.</li>
+              <li>Create an app with any name, such as <em>Netflix Sync</em>. FlixToTrakt signs in with a code, not a redirect, so the Redirect URI isn&apos;t used.</li>
+              <li>Copy the app&apos;s <strong>Client ID</strong> into the box below. The Client Secret isn&apos;t needed.</li>
+            </ol>
+            <p>Trakt deletes apps that go unused for 30 days, so you may need to create a new one for a later import.</p>
+          </details>
 
           <hr style={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)', margin: '1.5rem 0' }} />
 
@@ -89,8 +108,8 @@ export default function SetupForm() {
           </ul>
 
           <p style={{ color: 'var(--text-secondary)' }}>
-            Trakt no longer lets every account create an API application. If that page is unavailable to you,
-            switch to <strong>Export a file</strong> above — it needs no Trakt credentials at all.
+            Prefer not to connect an app to your Trakt account? Switch to <strong>Export a file</strong> above. It
+            never touches the Trakt API.
           </p>
         </div>
       ) : (
@@ -114,22 +133,16 @@ export default function SetupForm() {
       <form onSubmit={handleSubmit}>
         {mode === 'trakt' && (
           <>
-            <label htmlFor="clientId">Client ID</label>
+            <label htmlFor="clientId">
+              Your own Trakt Client ID {hasSharedClientId ? '(Optional)' : '(Required)'}
+            </label>
             <input
               id="clientId"
               type="text"
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
-              required
-            />
-
-            <label htmlFor="clientSecret">Client Secret</label>
-            <input
-              id="clientSecret"
-              type="password"
-              value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              required
+              placeholder={hasSharedClientId ? "Leave empty to use FlixToTrakt's app" : ''}
+              required={!hasSharedClientId}
             />
           </>
         )}

@@ -110,7 +110,7 @@ export default function LoginForm() {
     <div className="card" style={{ textAlign: 'center' }}>
       <h2>Connect to Trakt</h2>
       <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>
-        Your API credentials are saved. Now, you need to authorize this app to access your Trakt account.
+        Authorize FlixToTrakt to add your Netflix history to your Trakt account.
       </p>
 
       {error && (
