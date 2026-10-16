@@ -5,13 +5,16 @@ import Papa from 'papaparse';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   DateOrder,
+  HISTORY_LANGUAGES,
   NetflixEntry,
   detectDateOrder,
+  detectHistoryLanguage,
+  earliestWatchDate,
   parseNetflixRows,
   parseWatchedDate,
   toWatchedAtIso,
 } from '@/lib/netflix';
-import type { MatchCandidate, MatchResult } from '@/lib/tmdbMatch';
+import type { MatchCandidate, MatchRequestEntry, MatchResult } from '@/lib/tmdbMatch';
 import {
   MediaMatch,
   WatchRecord,
@@ -56,6 +59,8 @@ export default function ExportDashboard() {
   const [states, setStates] = useState<Record<string, ItemState>>({});
   const [dateOrder, setDateOrder] = useState<DateOrder>('mdy');
   const [dateOrderDetected, setDateOrderDetected] = useState(false);
+  const [language, setLanguage] = useState('en-US');
+  const [languageDetected, setLanguageDetected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [manualQuery, setManualQuery] = useState<Record<string, string>>({});
@@ -90,9 +95,13 @@ export default function ExportDashboard() {
           return;
         }
 
+        const detectedLanguage = detectHistoryLanguage(rows.slice(1).map(row => (row[0] || '').trim()));
+
         jobIdRef.current += 1;
         setDateOrder(order);
         setDateOrderDetected(detected !== null);
+        if (detectedLanguage) setLanguage(detectedLanguage);
+        setLanguageDetected(detectedLanguage !== null);
         setEntries(parsed);
         setStates(
           Object.fromEntries(parsed.map(entry => [entry.key, { status: 'pending' as ItemStatus, candidates: [] }]))
@@ -105,6 +114,49 @@ export default function ExportDashboard() {
     setDateOrder(order);
     setDateOrderDetected(false);
     // Re-sorting is not worth a re-parse; only the emitted timestamps change.
+  };
+
+  const toRequestEntry = (entry: NetflixEntry, showTmdbId?: number): MatchRequestEntry => ({
+    key: entry.key,
+    originalTitle: entry.originalTitle,
+    groupTitle: entry.groupTitle,
+    seasonNumber: entry.seasonNumber,
+    seasonName: entry.seasonName,
+    episodeTitle: entry.episodeTitle,
+    // Lets the matcher rule out anything released after the first watch.
+    watchedBefore: earliestWatchDate(entry.dates, dateOrder),
+    showTmdbId,
+  });
+
+  /** POST a batch to the matcher; 'unauthorized' when the TMDB token was rejected. */
+  const requestMatches = async (
+    batch: NetflixEntry[],
+    showTmdbId?: number
+  ): Promise<MatchResult[] | 'unauthorized'> => {
+    const res = await fetch('/api/tmdb/match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language, entries: batch.map(entry => toRequestEntry(entry, showTmdbId)) }),
+    });
+    if (res.status === 401) return 'unauthorized';
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: { results: MatchResult[] } = await res.json();
+    return data.results || [];
+  };
+
+  const applyResults = (results: MatchResult[]) => {
+    setStates(prev => {
+      const next = { ...prev };
+      for (const result of results) {
+        next[result.key] = {
+          status: result.status,
+          match: result.match,
+          candidates: result.candidates || [],
+          note: result.note,
+        };
+      }
+      return next;
+    });
   };
 
   const runMatching = async () => {
@@ -122,44 +174,16 @@ export default function ExportDashboard() {
       setStatusText(`Matching batch ${Math.floor(start / BATCH_SIZE) + 1} of ${totalBatches} against TMDB...`);
 
       try {
-        const res = await fetch('/api/tmdb/match', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            entries: batch.map(entry => ({
-              key: entry.key,
-              originalTitle: entry.originalTitle,
-              groupTitle: entry.groupTitle,
-              seasonNumber: entry.seasonNumber,
-              seasonName: entry.seasonName,
-              episodeTitle: entry.episodeTitle,
-            })),
-          }),
-        });
+        const results = await requestMatches(batch);
 
         if (jobIdRef.current !== jobId) return;
 
-        if (res.status === 401) {
+        if (results === 'unauthorized') {
           alert('TMDB token missing or rejected. Re-enter it in setup.');
           break;
         }
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        const data: { results: MatchResult[] } = await res.json();
-
-        setStates(prev => {
-          const next = { ...prev };
-          for (const result of data.results || []) {
-            next[result.key] = {
-              status: result.status === 'matched' ? 'matched' : result.status,
-              match: result.match,
-              candidates: result.candidates || [],
-              note: result.note,
-            };
-          }
-          return next;
-        });
+        applyResults(results);
       } catch {
         setStates(prev => {
           const next = { ...prev };
@@ -193,7 +217,7 @@ export default function ExportDashboard() {
       const res = await fetch('/api/tmdb/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, language }),
       });
       if (res.ok) {
         const data: { candidates: MatchCandidate[] } = await res.json();
@@ -217,6 +241,7 @@ export default function ExportDashboard() {
           showTmdbId,
           seasonNumber: entry.seasonNumber,
           episodeTitle: entry.episodeTitle,
+          language,
         }),
       });
       if (res.ok) {
@@ -242,6 +267,38 @@ export default function ExportDashboard() {
       });
       return next;
     });
+  };
+
+  /**
+   * The user has told us which show a review group belongs to: re-run episode
+   * matching for every entry in the group against that show only.
+   */
+  const rematchGroup = async (groupEntries: NetflixEntry[], showTmdbId: number, showLabel: string) => {
+    setIsProcessing(true);
+    jobIdRef.current += 1;
+    const jobId = jobIdRef.current;
+
+    for (let start = 0; start < groupEntries.length; start += BATCH_SIZE) {
+      if (jobIdRef.current !== jobId) return;
+      setStatusText(`Re-matching ${groupEntries.length} episodes against ${showLabel}...`);
+
+      try {
+        const results = await requestMatches(groupEntries.slice(start, start + BATCH_SIZE), showTmdbId);
+        if (jobIdRef.current !== jobId) return;
+        if (results === 'unauthorized') {
+          alert('TMDB token missing or rejected. Re-enter it in setup.');
+          break;
+        }
+        applyResults(results);
+      } catch {
+        // Leave the batch as it was; the user can retry from the group card.
+      }
+    }
+
+    if (jobIdRef.current === jobId) {
+      setStatusText(null);
+      setIsProcessing(false);
+    }
   };
 
   const skipGroup = (groupEntries: NetflixEntry[]) => {
@@ -562,6 +619,30 @@ export default function ExportDashboard() {
               )}
             </div>
 
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: '1rem 0', flexWrap: 'wrap' }}>
+              <label htmlFor="history-language" style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                Netflix history language:
+              </label>
+              <select
+                id="history-language"
+                value={language}
+                onChange={e => {
+                  setLanguage(e.target.value);
+                  setLanguageDetected(false);
+                }}
+                style={{ padding: '6px 12px', fontSize: '0.85rem' }}
+              >
+                {HISTORY_LANGUAGES.map(option => (
+                  <option key={option.code} value={option.code}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {languageDetected && (
+                <span style={{ color: 'var(--success)', fontSize: '0.85rem' }}>detected from your file</span>
+              )}
+            </div>
+
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
               <button onClick={runMatching} disabled={isProcessing || counts.pending === 0}>
                 1. Match with TMDB
@@ -665,6 +746,22 @@ export default function ExportDashboard() {
                 <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-accent)', borderRadius: '6px' }}>
                   <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>Quick actions:</p>
                   <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {Array.from(showCandidates.values()).map(candidate =>
+                      candidate.media.type === 'show' ? (
+                        <button
+                          key={`rematch-${candidate.id}`}
+                          style={{ padding: '6px 12px', fontSize: '0.9rem' }}
+                          disabled={isProcessing}
+                          onClick={() => {
+                            if (candidate.media.type === 'show') {
+                              rematchGroup(groupEntries, candidate.media.tmdbId, candidate.media.title);
+                            }
+                          }}
+                        >
+                          Re-match episodes in: {candidate.label}
+                        </button>
+                      ) : null
+                    )}
                     {Array.from(showCandidates.values()).map(candidate => (
                       <button
                         key={candidate.id}
@@ -679,6 +776,7 @@ export default function ExportDashboard() {
                     </button>
                   </div>
                   <p style={{ margin: '0.75rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    &ldquo;Re-match episodes&rdquo; looks each episode up again in the show you picked.
                     &ldquo;Mark all as watched&rdquo; writes one whole-show entry, which tells Trakt every episode was seen.
                   </p>
                 </div>

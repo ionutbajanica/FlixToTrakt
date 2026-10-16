@@ -20,6 +20,47 @@ export interface NetflixEntry {
 
 export type DateOrder = 'dmy' | 'mdy';
 
+/**
+ * Languages a Netflix history can be in, as TMDB language codes, with the
+ * word Netflix uses for "Season" in that locale where it is distinctive.
+ * Portuguese shares "Temporada" with Spanish, so it is only picked by hand.
+ */
+export const HISTORY_LANGUAGES: { code: string; label: string; seasonWord?: RegExp }[] = [
+  { code: 'en-US', label: 'English', seasonWord: /^season$/i },
+  { code: 'es-ES', label: 'Spanish', seasonWord: /^temporada$/i },
+  { code: 'pt-BR', label: 'Portuguese' },
+  { code: 'de-DE', label: 'German', seasonWord: /^staffel$/i },
+  { code: 'fr-FR', label: 'French', seasonWord: /^saison$/i },
+  { code: 'it-IT', label: 'Italian', seasonWord: /^stagione$/i },
+  { code: 'nl-NL', label: 'Dutch', seasonWord: /^seizoen$/i },
+  { code: 'ro-RO', label: 'Romanian', seasonWord: /^sezonul$/i },
+  { code: 'pl-PL', label: 'Polish', seasonWord: /^sezon$/i },
+  { code: 'sv-SE', label: 'Swedish', seasonWord: /^säsong$/i },
+  { code: 'da-DK', label: 'Danish', seasonWord: /^sæson$/i },
+  { code: 'nb-NO', label: 'Norwegian', seasonWord: /^sesong$/i },
+  { code: 'fi-FI', label: 'Finnish', seasonWord: /^kausi$/i },
+];
+
+/**
+ * Guess the history's language from its season labels ("Staffel 2" → de-DE).
+ * Returns null when no title carries a recognisable label.
+ */
+export const detectHistoryLanguage = (titles: string[]): string | null => {
+  const counts = new Map<string, number>();
+  for (const title of titles) {
+    const match = title.match(/^.+?:\s+(\S+)\s+\d{1,2}:/);
+    if (!match) continue;
+    const language = HISTORY_LANGUAGES.find(l => l.seasonWord?.test(match[1]));
+    if (language) counts.set(language.code, (counts.get(language.code) || 0) + 1);
+  }
+
+  let best: string | null = null;
+  for (const [code, count] of counts) {
+    if (best === null || count > counts.get(best)!) best = code;
+  }
+  return best;
+};
+
 const SEASON_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
   seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
@@ -62,14 +103,14 @@ export const parseNetflixTitle = (originalTitle: string): ParsedTitle => {
   // and a greedy show name would swallow the season and mangle the episode.
 
   // regex 1: TvShow: Season 1 (or Season One): EpisodeTitle
-  let match = originalTitle.match(/^(.+?):\s+((?:Season|Part|Chapter|Series|Volume)\s+[\w]+):\s+(.*)$/);
+  let match = originalTitle.match(/^(.+?):\s+((?:Season|Part|Chapter|Series|Volume|Book)\s+[\w]+):\s+(.*)$/);
   if (match) {
     groupTitle = match[1].trim();
     seasonNumber = wordToSeasonNumber(match[2]);
     episodeTitle = match[3].trim();
   } else {
     // regex 1b: TvShow: Season 1 - Part A: EpisodeTitle (dash variant)
-    match = originalTitle.match(/^(.+?):\s+((?:Season|Part|Chapter|Series|Volume)\s+[\w]+)\s+[–-]\s+.+?:\s+(.*)$/);
+    match = originalTitle.match(/^(.+?):\s+((?:Season|Part|Chapter|Series|Volume|Book)\s+[\w]+)\s+[–-]\s+.+?:\s+(.*)$/);
     if (match) {
       groupTitle = match[1].trim();
       seasonNumber = wordToSeasonNumber(match[2]);
@@ -199,6 +240,22 @@ export const toWatchedAtIso = (value: string, order: DateOrder): string | null =
   const { year, month, day } = parsed;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${year}-${pad(month)}-${pad(day)}T12:00:00.000Z`;
+};
+
+/**
+ * The first time a title was watched, as YYYY-MM-DD — the matcher uses it to
+ * rule out anything released later. Undefined when no date parses.
+ */
+export const earliestWatchDate = (dates: string[], order: DateOrder): string | undefined => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  let earliest: string | undefined;
+  for (const value of dates) {
+    const parsed = parseWatchedDate(value, order);
+    if (!parsed) continue;
+    const iso = `${parsed.year}-${pad(parsed.month)}-${pad(parsed.day)}`;
+    if (earliest === undefined || iso < earliest) earliest = iso;
+  }
+  return earliest;
 };
 
 /** Sort key for a watch date — larger is more recent, 0 when unparseable. */

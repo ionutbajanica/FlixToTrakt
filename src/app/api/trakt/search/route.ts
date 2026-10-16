@@ -1,5 +1,20 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { parseNetflixTitle } from '@/lib/netflix';
+import { TmdbClient } from '@/lib/tmdb';
+import { matchEntry } from '@/lib/tmdbMatch';
+
+interface TraktIds { trakt: number; slug?: string }
+interface TraktEpisode { number: number; season: number; title?: string; ids: TraktIds }
+/** The parts of a Trakt search hit this route reads or passes through. */
+interface TraktHit {
+  type: string;
+  score: number;
+  verified?: boolean;
+  movie?: { title: string; year?: number; ids: TraktIds };
+  show?: { title: string; year?: number; ids: TraktIds };
+  episode?: TraktEpisode & { showTitle?: string; showSlug?: string };
+}
 
 // ── Cache ──────────────────────────────────────────────────────────────────
 const getCache = () => {
@@ -134,7 +149,70 @@ export async function POST(request: Request) {
     return null;
   };
 
+  const tmdbClient = tmdbToken ? new TmdbClient(tmdbToken) : null;
+
+  /** Trakt's record for a TMDB id, cached — one lookup per show/movie, not per episode. */
+  const traktByTmdb = async (type: 'movie' | 'show', tmdbId: number): Promise<TraktHit[] | null> => {
+    const cacheKey = `tmdb-${type}-${tmdbId}`;
+    const cached: TraktHit[] | undefined = cache.fallbacks.get(cacheKey);
+    if (cached) return cached;
+    const res = await fetchWithRetry(`https://api.trakt.tv/search/tmdb/${tmdbId}?type=${type}`);
+    if (!res.ok) return null;
+    const data: TraktHit[] = await res.json();
+    if (Array.isArray(data) && data.length > 0) cache.fallbacks.set(cacheKey, data);
+    return data;
+  };
+
+  /**
+   * Run the shared TMDB matcher (the one export mode uses) and translate a
+   * confident match into Trakt's search-result shape. Returns null when the
+   * matcher is unsure or Trakt has no record, so the legacy search below can
+   * still offer its suggestions. Results carry `verified: true`, which the
+   * dashboard treats as an exact match.
+   */
+  const matchViaTmdb = async (title: string): Promise<TraktHit[] | null> => {
+    if (!tmdbClient) return null;
+
+    const parsed = parseNetflixTitle(title);
+    const result = await matchEntry(tmdbClient, { key: title, originalTitle: title, ...parsed });
+    if (result.status !== 'matched' || !result.match) return null;
+    const media = result.match;
+
+    if (media.type === 'movie' || media.type === 'show') {
+      const data = await traktByTmdb(media.type, media.tmdbId);
+      if (!data || data.length === 0) return null;
+      return [{ ...data[0], score: 100, verified: true }];
+    }
+
+    const showData = await traktByTmdb('show', media.showTmdbId);
+    const show = showData?.[0]?.show;
+    if (!show) return null;
+
+    const seasonCacheKey = `${show.ids.trakt}-${media.season}`;
+    let episodes: TraktEpisode[] | undefined = cache.seasons.get(seasonCacheKey);
+    if (!episodes) {
+      const res = await fetchWithRetry(`https://api.trakt.tv/shows/${show.ids.slug}/seasons/${media.season}/episodes`);
+      if (!res.ok) return null;
+      episodes = await res.json();
+      cache.seasons.set(seasonCacheKey, episodes);
+    }
+
+    const episode = (episodes || []).find(ep => ep.number === media.number);
+    if (!episode) return null;
+
+    return [{
+      type: 'episode',
+      score: 100,
+      verified: true,
+      show,
+      episode: { ...episode, showTitle: show.title, showSlug: show.ids.slug },
+    }];
+  };
+
   const processTitle = async (title: string): Promise<any> => {
+    const verified = await matchViaTmdb(title);
+    if (verified) return verified;
+
     let resultData: any = [];
     let handled = false;
 

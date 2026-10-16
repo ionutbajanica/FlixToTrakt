@@ -16,7 +16,13 @@ const ROMAN_WORDS: Record<string, string> = {
   ix: '9', x: '10', viii: '8', vii: '7', vi: '6', v: '5', iv: '4', iii: '3', ii: '2', i: '1',
 };
 
-export const stripArticle = (s: string) => s.replace(/^(the|a|an)\s+/i, '').trim();
+/**
+ * Leading articles, so "The Crown" and "Crown" compare equal. English plus the
+ * common Romance/German ones for localised histories — but not words that are
+ * also ordinary English ("Die", "I", "O"), which would eat real title words.
+ */
+export const stripArticle = (s: string) =>
+  s.replace(/^(?:(?:the|a|an|el|la|los|las|le|les|il|lo|gli|der|das)\s+|l['’]\s*)/i, '').trim();
 
 /**
  * TMDB numbers multi-part episodes as "Hurt (1)", "Hurt (2)", while Netflix's
@@ -42,18 +48,39 @@ const normalizeNumbers = (s: string) => {
   return out;
 };
 
+/** Letters NFD does not decompose, so the accent fold below misses them. */
+const LETTER_FOLDS: Record<string, string> = {
+  'ß': 'ss', 'ø': 'o', 'æ': 'ae', 'œ': 'oe', 'ł': 'l', 'đ': 'd', 'ð': 'd', 'þ': 'th', 'ı': 'i',
+};
+
 /**
  * Flatten a title for equality checks: lowercase, no leading article,
- * number words as digits, no punctuation, single spaces.
+ * "&" as "and", no apostrophes, accents folded, number words as digits, no
+ * punctuation, single spaces.
+ *
+ * Letters from every script survive — a Korean or Cyrillic title must not
+ * flatten to an empty string, or every such title would "equal" every other.
+ * Equality checks should still go through sameNormalized().
  */
 export const normalizeTitle = (s: string) =>
-  normalizeNumbers(stripArticle(String(s || '').toLowerCase()))
-    // Fold accents so "Ödipussi" and "Odipussi" compare equal.
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
+  normalizeNumbers(
+    stripArticle(String(s || '').toLowerCase().replace(/&/g, ' and '))
+      // "What’s" and "Whats" are one word; turning the apostrophe into a
+      // space would split it in two.
+      .replace(/['’‘`´]/g, '')
+      .replace(/[ßøæœłđðþı]/g, c => LETTER_FOLDS[c])
+      // Fold accents so "Ödipussi" and "Odipussi" compare equal. This runs
+      // before the number pass, which would otherwise read "vía" as roman six.
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .normalize('NFC')
+  )
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+/** Equality on already-normalized titles; two empty strings never match. */
+export const sameNormalized = (a: string, b: string) => a !== '' && a === b;
 
 /**
  * Split a trailing "part 1" / "part 2" off an already-normalized title
@@ -106,18 +133,31 @@ export const isCloseTitle = (a: string, b: string): boolean => {
   return distance <= Math.min(3, Math.floor(longer * 0.12));
 };
 
-/** 0–100 similarity used to rank fuzzy candidates. */
+/**
+ * 0–100 similarity used to rank fuzzy candidates; 100 only for an exact
+ * normalized match. Takes the best of three views of the pair:
+ *  - character similarity (edit distance), for spelling drift;
+ *  - word-set overlap, for reordered or partly shared words;
+ *  - whole-word containment ("Glass Onion" inside "Glass Onion A Knives Out
+ *    Mystery"), scaled by how much of the longer title it covers.
+ */
 export const titleScore = (candidate: string, target: string): number => {
   const a = normalizeTitle(candidate);
   const b = normalizeTitle(target);
   if (!a || !b) return 0;
   if (a === b) return 100;
-  if (a.includes(b) || b.includes(a)) return 70;
 
-  const aWords = a.split(' ').filter(Boolean);
-  const bWords = new Set(b.split(' ').filter(Boolean));
-  if (aWords.length === 0 || bWords.size === 0) return 0;
+  const longer = Math.max(a.length, b.length);
+  const shorter = Math.min(a.length, b.length);
+  const charSimilarity = 1 - levenshtein(a, b) / longer;
 
-  const overlap = aWords.filter(w => bWords.has(w)).length;
-  return Math.round((overlap / Math.max(aWords.length, bWords.size)) * 60);
+  const aWords = new Set(a.split(' '));
+  const bWords = new Set(b.split(' '));
+  const shared = [...aWords].filter(w => bWords.has(w)).length;
+  const wordOverlap = (2 * shared) / (aWords.size + bWords.size);
+
+  const contained = ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `);
+  const containment = contained ? 55 + 35 * (shorter / longer) : 0;
+
+  return Math.min(99, Math.round(Math.max(charSimilarity * 95, wordOverlap * 90, containment)));
 };
