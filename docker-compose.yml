@@ -8,5 +8,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      # Optional: use a different Trakt app than the one the project ships with.
+      # - TRAKT_CLIENT_ID=your-client-id
     # If you put Nginx on the same docker network, you can remove the ports section 
     # and just route directly to 'flixtotrakt:3000' inside the docker network.

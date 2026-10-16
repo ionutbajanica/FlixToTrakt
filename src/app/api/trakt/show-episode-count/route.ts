@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { resolveTraktClientId } from '@/lib/trakt-server';
 
 /**
  * Given a show name, looks it up on TMDB and returns total episode count.
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
 
   const cookieStore = await cookies();
   const tmdbToken = cookieStore.get('tmdb_token')?.value;
-  const clientId = cookieStore.get('trakt_client_id')?.value;
+  const clientId = resolveTraktClientId(cookieStore);
   const token = cookieStore.get('trakt_access_token')?.value;
 
   if (!tmdbToken) {

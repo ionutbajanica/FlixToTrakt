@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { resolveTraktClientId } from '@/lib/trakt-server';
 import { parseNetflixTitle } from '@/lib/netflix';
 import { TmdbClient } from '@/lib/tmdb';
 import { matchEntry } from '@/lib/tmdbMatch';
@@ -109,7 +110,7 @@ export async function POST(request: Request) {
   }
 
   const cookieStore = await cookies();
-  const clientId = cookieStore.get('trakt_client_id')?.value;
+  const clientId = resolveTraktClientId(cookieStore);
   const token = cookieStore.get('trakt_access_token')?.value;
   const tmdbToken = cookieStore.get('tmdb_token')?.value;
 

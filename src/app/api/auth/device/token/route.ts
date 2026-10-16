@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { resolveTraktClientId } from '@/lib/trakt-server';
 
 export async function POST(req: Request) {
   const cookieStore = await cookies();
-  const clientId = cookieStore.get('trakt_client_id')?.value;
-  const clientSecret = cookieStore.get('trakt_client_secret')?.value;
+  const clientId = resolveTraktClientId(cookieStore);
 
-  if (!clientId || !clientSecret) {
-    return NextResponse.json({ error: 'Missing Client credentials' }, { status: 400 });
+  if (!clientId) {
+    return NextResponse.json({ error: 'Missing Client ID' }, { status: 400 });
   }
 
   const { device_code } = await req.json();
@@ -23,10 +23,11 @@ export async function POST(req: Request) {
       'trakt-api-key': clientId,
       'User-Agent': 'Trakt-Updater-App/1.0',
     },
+    // No client_secret: Trakt has deprecated it for user sign-in, which is
+    // what lets every user share one project-owned Client ID.
     body: JSON.stringify({
       code: device_code,
       client_id: clientId,
-      client_secret: clientSecret
     }),
   });
 
@@ -42,7 +43,9 @@ export async function POST(req: Request) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24 * 30 // 30 days
+      // Trakt access tokens last 7 days; expire the cookie with the token so a
+      // stale one sends the user back through login instead of 401ing.
+      maxAge: data.expires_in ?? 60 * 60 * 24 * 7
     });
     
     cookieStore.set('trakt_refresh_token', data.refresh_token, {

@@ -6,6 +6,21 @@ export type CookieReader = {
   get(name: string): { value: string } | undefined;
 };
 
+/**
+ * Client ID of the project's own Trakt app. A Client ID is public (it travels
+ * in every request header) and the device flow needs no Client Secret, so it
+ * is safe to commit. Empty until the app is registered on developer.trakt.tv.
+ */
+export const SHARED_TRAKT_CLIENT_ID = '';
+
+/** This deployment's Trakt app: TRAKT_CLIENT_ID if set, otherwise the project's. */
+export const sharedTraktClientId = (): string | undefined =>
+  process.env.TRAKT_CLIENT_ID?.trim() || SHARED_TRAKT_CLIENT_ID || undefined;
+
+/** The user's own Client ID if they saved one, otherwise the shared app's. */
+export const resolveTraktClientId = (cookieStore: CookieReader): string | undefined =>
+  cookieStore.get('trakt_client_id')?.value || sharedTraktClientId();
+
 export class TraktAuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -24,7 +39,7 @@ export const traktAuthErrorResponse = (error: TraktAuthError) => ({
  * into a 401 so the UI can send them back through the login flow.
  */
 export const createTraktFetcher = (cookieStore: CookieReader) => {
-  const clientId = cookieStore.get('trakt_client_id')?.value;
+  const clientId = resolveTraktClientId(cookieStore);
   const accessToken = cookieStore.get('trakt_access_token')?.value;
 
   if (!clientId) throw new TraktAuthError('Missing Trakt Client ID');

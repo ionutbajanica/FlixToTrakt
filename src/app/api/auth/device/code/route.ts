@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { resolveTraktClientId } from '@/lib/trakt-server';
 
 export async function POST() {
   const cookieStore = await cookies();
-  const clientId = cookieStore.get('trakt_client_id')?.value;
+  const clientId = resolveTraktClientId(cookieStore);
 
   if (!clientId) {
     return NextResponse.json({ error: 'Missing Client ID' }, { status: 400 });
