@@ -8,6 +8,8 @@ import { detectDateOrder, parseNetflixRows } from '@/lib/netflix';
 interface TraktSearchResult {
   type: string;
   score: number;
+  /** Set when the shared TMDB matcher confirmed this result — always an exact match. */
+  verified?: boolean;
   movie?: { title: string; year: number; ids: { trakt: number; slug?: string } };
   show?: { title: string; year: number; ids: { trakt: number; slug?: string } };
   episode?: { title: string; season: number; number: number; showTitle?: string; showSlug?: string; ids: { trakt: number } };
@@ -277,7 +279,8 @@ export default function Dashboard() {
           };
 
           const exactMatches = data.filter(
-            r => (r.type === 'episode' && (r.score === 100 || isEpisodeNameMatch(r))) ||
+            r => r.verified ||
+                 (r.type === 'episode' && (r.score === 100 || isEpisodeNameMatch(r))) ||
                  (r.type === 'movie' && r.movie?.title.toLowerCase() === newItems[i].originalTitle.toLowerCase()) || 
                  (r.type === 'show' && r.show?.title.toLowerCase() === newItems[i].originalTitle.toLowerCase())
           );

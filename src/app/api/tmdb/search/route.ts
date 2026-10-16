@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { TmdbClient } from '@/lib/tmdb';
+import { TmdbClient, sanitizeLanguage } from '@/lib/tmdb';
 import { listEpisodeCandidates, searchCandidates } from '@/lib/tmdbMatch';
 
 // Manual lookups for the export review UI: free-text search, or the episode
@@ -15,6 +15,7 @@ export async function POST(request: Request) {
 
   const body = await request.json();
   const client = new TmdbClient(tmdbToken);
+  const language = sanitizeLanguage(body.language);
 
   try {
     if (body.showTmdbId) {
@@ -22,7 +23,8 @@ export async function POST(request: Request) {
         client,
         Number(body.showTmdbId),
         body.seasonNumber === undefined || body.seasonNumber === null ? undefined : Number(body.seasonNumber),
-        body.episodeTitle || undefined
+        body.episodeTitle || undefined,
+        { language }
       );
       return NextResponse.json({ candidates });
     }
@@ -32,7 +34,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Query required' }, { status: 400 });
     }
 
-    const candidates = await searchCandidates(client, query);
+    const candidates = await searchCandidates(client, query, { language });
     return NextResponse.json({ candidates });
   } catch (err) {
     console.error('TMDB search error:', err);

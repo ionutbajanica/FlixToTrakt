@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   detectDateOrder,
+  detectHistoryLanguage,
+  earliestWatchDate,
   parseNetflixRows,
   parseNetflixTitle,
   toWatchedAtIso,
@@ -84,4 +86,24 @@ test('rows collapse per title, newest first, and double episodes split', () => {
     entries.filter(e => e.groupTitle === 'Some Show').map(e => e.episodeTitle),
     ['The Third', 'The Debt']
   );
+});
+
+test('"Book N" labels are seasons too', () => {
+  const parsed = parseNetflixTitle('Avatar: The Last Airbender: Book 2: The Avatar State');
+  assert.equal(parsed.groupTitle, 'Avatar: The Last Airbender');
+  assert.equal(parsed.seasonNumber, 2);
+  assert.equal(parsed.episodeTitle, 'The Avatar State');
+});
+
+test('the history language is read off its season labels', () => {
+  assert.equal(detectHistoryLanguage(['Dark: Staffel 1: Geheimnisse', 'Dark: Staffel 2: Anfänge und Enden', 'Lupin: Partie 1: Chapitre 1']), 'de-DE');
+  assert.equal(detectHistoryLanguage(['Élite: Temporada 3: Polo']), 'es-ES');
+  assert.equal(detectHistoryLanguage(['Younger: Season 3: Summer Friday']), 'en-US');
+  assert.equal(detectHistoryLanguage(['Glass Onion: A Knives Out Mystery']), null);
+});
+
+test('earliestWatchDate returns the first watch as an ISO day, ignoring junk', () => {
+  assert.equal(earliestWatchDate(['5/23/26', '1/2/24', 'not a date'], 'mdy'), '2024-01-02');
+  assert.equal(earliestWatchDate(['23/05/2026', '02/01/2024'], 'dmy'), '2024-01-02');
+  assert.equal(earliestWatchDate(['', 'garbage'], 'mdy'), undefined);
 });

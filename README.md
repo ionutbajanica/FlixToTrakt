@@ -16,12 +16,15 @@ All processing happens locally on your machine. Your Trakt API credentials are s
 ### 🧠 Smart Multi-Layer Matching
 The app uses a sophisticated matching pipeline to convert Netflix's messy CSV titles into accurate Trakt entries:
 
-1. **TMDB-first lookup** — TV show names are searched on TMDB first (free, no rate limit), then cross-referenced to Trakt via the TMDB→Trakt ID bridge. This is faster and more accurate than text search alone.
+1. **TMDB-first lookup** — Both modes share one TMDB matcher (`lib/tmdbMatch.ts`); sync mode then cross-references the result to Trakt via the TMDB→Trakt ID bridge. This is faster and more accurate than text search alone.
 2. **Structured episode parsing** — Netflix titles like `"Show: Season 1: Episode Title"` are parsed into structured show + season + episode queries, with exact title matching against the full season episode list.
-3. **Fuzzy scoring** — When no exact match is found, episodes are scored using partial string matching (substring inclusion, word overlap) and ranked by relevance.
-4. **Full-show shortcut** — Before processing individual episodes, the app checks if the number of episodes in your CSV matches the total episode count on TMDB. If it does, the entire show is auto-matched with a single API call, skipping potentially hundreds of lookups.
-5. **Date filtering** — Suggestions whose release date is later than your watched date are automatically hidden, preventing impossible matches.
-6. **Already-watched detection** — Items already in your Trakt watch history are detected and marked as `[ALREADY WATCHED]`, preventing duplicate syncs.
+3. **Episode title decides the show** — Up to three same-name shows (remakes, UK/US versions) are tried, and the one that actually has the episode wins. Shows that premiered after your first watch are ruled out.
+4. **Season-agnostic fallback** — If the episode is not in the season Netflix named (Netflix's "Part 3" is not always TMDB's season 3, and titles without a season default to 1), the rest of the show and then its specials are searched before anything goes to review.
+5. **Fuzzy scoring** — Spelling drift is accepted when one episode is a near-identical spelling, or scores clearly ahead of every other episode (edit distance, word overlap and whole-word containment). Anything closer than that goes to review, ranked by the same score.
+6. **Localised histories** — The history's language is detected from its season labels ("Staffel 2", "Temporada 1") and can be changed on the export screen. Episodes are compared against both the localised and the English TMDB names; titles in any script (Cyrillic, Korean, Japanese…) are compared as written.
+7. **Full-show shortcut** — Before processing individual episodes, the app checks if the number of episodes in your CSV matches the total episode count on TMDB. If it does, the entire show is auto-matched with a single API call, skipping potentially hundreds of lookups.
+8. **Date filtering** — Anything released after your first watch is ruled out during matching, which also settles same-title movie remakes. Suggestions are filtered the same way.
+9. **Already-watched detection** — Items already in your Trakt watch history are detected and marked as `[ALREADY WATCHED]`, preventing duplicate syncs.
 
 ### 🔍 Manual Search
 When automatic matching fails, every unmatched item (and even ignored items) includes a **manual Trakt search bar**. Type any query, hit Enter, and select the correct result from up to 8 suggestions — each with a `[View on Trakt]` link for verification.
@@ -92,7 +95,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 1. **Pick "Export a file (no Trakt app)"** on the setup screen and paste your TMDB read access token. Nothing else is stored.
 2. **Upload your Netflix CSV** — same file as above. The app auto-detects whether Netflix wrote your dates as `MM/DD/YY` or `DD/MM/YY`; you can override it with one click.
-3. **Match with TMDB** — titles are resolved to TMDB shows, seasons, episodes and movies in batches. Anything ambiguous lands in a review list with suggestions, a manual TMDB search box, an episode browser, and a group-level "mark the whole show as watched" action.
+3. **Match with TMDB** — titles are resolved to TMDB shows, seasons, episodes and movies in batches, in the history language detected from your file (changeable next to the date format). Anything ambiguous lands in a review list with suggestions, a manual TMDB search box, an episode browser, and two group-level actions: "re-match episodes in" a show you pick — every episode in the group is looked up again in that show — or "mark the whole show as watched".
 4. **Download an import file** — three formats are produced from the same matches:
 
    | File | Contents | Use it for |
@@ -117,9 +120,17 @@ If you'd rather not run anything:
 ### Tests
 
 ```bash
-npm test     # Netflix CSV parsing + export file formats (node:test)
+npm test     # parsing, title normalisation, the matcher (fake TMDB), export file formats (node:test)
 npm run build
 ```
+
+`npm test` also parses any `NetflixViewingHistory*.csv` in the project root (gitignored — viewing histories are personal data) and checks every row is accounted for. To see how the matcher does on a real history against live TMDB:
+
+```bash
+TMDB_TOKEN=<read access token> npm run match-report -- NetflixViewingHistory.csv --out report.json
+```
+
+Add `--lib <other checkout>/src/lib` to run another version of the matcher over the same file for a before/after comparison.
 
 ---
 

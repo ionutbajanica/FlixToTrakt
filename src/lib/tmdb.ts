@@ -7,6 +7,13 @@
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 const MAX_CONCURRENT = 8;
+export const DEFAULT_LANGUAGE = 'en-US';
+
+const LANGUAGE_PATTERN = /^[a-z]{2}-[A-Z]{2}$/;
+
+/** Accept only well-formed TMDB language codes; anything else falls back to English. */
+export const sanitizeLanguage = (value: unknown): string =>
+  typeof value === 'string' && LANGUAGE_PATTERN.test(value) ? value : DEFAULT_LANGUAGE;
 
 export interface TmdbSearchResult {
   id: number;
@@ -141,42 +148,51 @@ export class TmdbClient {
     }
   }
 
-  async searchTv(query: string): Promise<TmdbSearchResult[]> {
+  // `language` picks which translation TMDB returns in name/title fields.
+  // Searches match every translation regardless; it only changes the labels.
+
+  async searchTv(query: string, language = DEFAULT_LANGUAGE): Promise<TmdbSearchResult[]> {
     const data = await this.get<{ results?: TmdbSearchResult[] }>(
-      `/search/tv?query=${encodeURIComponent(query)}&language=en-US`
+      `/search/tv?query=${encodeURIComponent(query)}&language=${language}`
     );
     return data?.results ?? [];
   }
 
-  async searchMovie(query: string): Promise<TmdbSearchResult[]> {
+  async searchMovie(query: string, language = DEFAULT_LANGUAGE): Promise<TmdbSearchResult[]> {
     const data = await this.get<{ results?: TmdbSearchResult[] }>(
-      `/search/movie?query=${encodeURIComponent(query)}&language=en-US`
+      `/search/movie?query=${encodeURIComponent(query)}&language=${language}`
     );
     return data?.results ?? [];
   }
 
-  async searchMulti(query: string): Promise<TmdbSearchResult[]> {
+  async searchMulti(query: string, language = DEFAULT_LANGUAGE): Promise<TmdbSearchResult[]> {
     const data = await this.get<{ results?: TmdbSearchResult[] }>(
-      `/search/multi?query=${encodeURIComponent(query)}&language=en-US`
+      `/search/multi?query=${encodeURIComponent(query)}&language=${language}`
     );
     return (data?.results ?? []).filter(r => r.media_type === 'movie' || r.media_type === 'tv');
   }
 
-  async showDetails(id: number): Promise<TmdbShowDetails | null> {
-    return this.get<TmdbShowDetails>(`/tv/${id}?language=en-US&append_to_response=external_ids`);
+  async showDetails(id: number, language = DEFAULT_LANGUAGE): Promise<TmdbShowDetails | null> {
+    return this.get<TmdbShowDetails>(`/tv/${id}?language=${language}&append_to_response=external_ids`);
   }
 
-  async seasonEpisodes(showId: number, season: number): Promise<TmdbEpisode[]> {
+  async seasonEpisodes(showId: number, season: number, language = DEFAULT_LANGUAGE): Promise<TmdbEpisode[]> {
     const data = await this.get<{ episodes?: TmdbEpisode[] }>(
-      `/tv/${showId}/season/${season}?language=en-US`
+      `/tv/${showId}/season/${season}?language=${language}`
     );
     return data?.episodes ?? [];
   }
 
-  async movieDetails(id: number): Promise<TmdbMovieDetails | null> {
-    return this.get<TmdbMovieDetails>(`/movie/${id}?language=en-US`);
+  async movieDetails(id: number, language = DEFAULT_LANGUAGE): Promise<TmdbMovieDetails | null> {
+    return this.get<TmdbMovieDetails>(`/movie/${id}?language=${language}`);
   }
 }
+
+/** The calls the matcher makes — lets tests pass a fake in place of the HTTP client. */
+export type TmdbApi = Pick<
+  TmdbClient,
+  'searchTv' | 'searchMulti' | 'showDetails' | 'seasonEpisodes' | 'movieDetails'
+>;
 
 export const yearOf = (date?: string): number | undefined => {
   if (!date || date.length < 4) return undefined;
